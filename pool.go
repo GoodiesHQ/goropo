@@ -38,6 +38,8 @@ type Pool struct {
 	onPanic     func(any)       // optional handler for panics occurring within task execution
 	workerCount int             // number of worker goroutines in the pool
 	queueSize   int             // maximum size of the task queue
+	active      atomic.Int32    // number of active tasks being processed
+	cond        *sync.Cond      // condition variable to signal changes in active task count
 }
 
 func (p *Pool) IsClosed() bool {
@@ -70,14 +72,27 @@ func (p *Pool) worker() {
 				// channel closed, exit the worker
 				return
 			}
+			// mark task as active
+			p.active.Add(1)
+
 			// execute the task
 			func() {
 				// recover from panics within the task execution to ensure the worker continues running
 				defer func() {
+					// mark task as inactive
+					p.active.Add(-1)
+
+					// signal potential idle state
+					p.cond.L.Lock()
+					p.cond.Broadcast()
+					p.cond.L.Unlock()
+
 					if r := recover(); r != nil {
+						// pool panic handler, optional
 						if p.onPanic != nil {
 							p.onPanic(r)
 						}
+						// task panic handler, should always be present (resolves associated future with panic error)
 						if t.onPanic != nil {
 							t.onPanic(r)
 						}
@@ -120,6 +135,8 @@ func (p *Pool) reset() {
 	p.chAbort = make(chan struct{})
 	p.chClosed = make(chan struct{})
 	p.stopped.Store(false)
+	p.cond = sync.NewCond(&p.mu)
+	p.active.Store(0)
 
 	for i := 0; i < p.workerCount; i++ {
 		p.wg.Add(1)
@@ -127,15 +144,43 @@ func (p *Pool) reset() {
 	}
 }
 
-// Wait blocks until all workers have completed their tasks
+// Wait blocks until all workers have shut down, should be called after Stop/Close/Abort
 func (p *Pool) Wait() {
 	p.wg.Wait()
 }
 
+// WaitIdle blocks until all currently active tasks have completed, does not close the pool
+func (p *Pool) WaitIdle() {
+	defer Locker(p.cond.L)()
+	for p.active.Load() > 0 || len(p.chTasks) > 0 {
+		p.cond.Wait()
+	}
+}
+
+func (p *Pool) drain() {
+	for {
+		// drain the remaining queued tasks and invoke their onDrop handlers
+		select {
+		case t, ok := <-p.chTasks:
+			// if the channel is closed and empty, exit the loop
+			if !ok {
+				return
+			}
+			// invoke the onDrop handler if it exists
+			if t.onDrop != nil {
+				t.onDrop()
+			}
+		default:
+			return
+		}
+	}
+}
+
 // Stop stops the worker pool according to the specified StopMode
 func (p *Pool) Stop(mode StopMode) {
-	defer Locker(&p.mu)()
+	p.mu.Lock()
 	if p.stopped.Swap(true) {
+		p.mu.Unlock()
 		return
 	}
 
@@ -146,28 +191,17 @@ func (p *Pool) Stop(mode StopMode) {
 	case StopModeGraceful:
 		// close the tasks channel to stop accepting new tasks, but allow existing tasks to complete
 		close(p.chTasks)
+		p.mu.Unlock()
 	case StopModeAbort:
 		// close the abort channel to signal immediate termination of all workers
 		close(p.chAbort)
-	drainLoop:
-		for {
-			// drain the remaining queued tasks and invoke their onDrop handlers
-			select {
-			case t, ok := <-p.chTasks:
-				// if the channel is closed and empty, exit the loop
-				if !ok {
-					break drainLoop
-				}
-				// invoke the onDrop handler if it exists
-				if t.onDrop != nil {
-					t.onDrop()
-				}
-			default:
-				break drainLoop
-			}
-		}
+		p.mu.Unlock()
+
 		// close the tasks channel to stop accepting new tasks
 		close(p.chTasks)
+
+		// drain the tasks channel to drop remaining queued tasks
+		p.drain()
 	}
 	p.wg.Wait()
 }

@@ -337,3 +337,66 @@ func TestPool_TaskPanic(t *testing.T) {
 
 	pool.Wait()
 }
+
+func TestPool_Wait(t *testing.T) {
+	pool := NewPool(2, 5)
+	ctx := context.Background()
+
+	var complete atomic.Bool
+	complete.Store(false)
+
+	fut := Submit(pool, ctx, func(ctx context.Context) (string, error) {
+		time.Sleep(50 * time.Millisecond)
+		complete.Store(true)
+		return "done", nil
+	})
+
+	pool.Stop(StopModeGraceful)
+
+	if !complete.Load() {
+		t.Fatal("Expected task to be completed before Wait returns")
+	}
+
+	result, err := fut.Await(ctx)
+	if err != nil {
+		t.Fatalf("Expected no error from future, got: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("Expected result 'done', got: %s", result)
+	}
+}
+
+func TestPool_WaitIdle(t *testing.T) {
+	pool := NewPool(2, 5)
+	ctx := context.Background()
+
+	var complete atomic.Bool
+	complete.Store(false)
+
+	fut := Submit(pool, ctx, func(ctx context.Context) (string, error) {
+		time.Sleep(50 * time.Millisecond)
+		complete.Store(true)
+		return "done", nil
+	})
+
+	pool.WaitIdle()
+
+	if !complete.Load() {
+		t.Fatal("Expected task to be completed before WaitIdle returns")
+	}
+
+	if fut.IsComplete() == false {
+		t.Fatal("Expected future to be done after WaitIdle")
+	}
+
+	result, err := fut.Await(ctx)
+	if err != nil {
+		t.Fatalf("Expected no error from future, got: %v", err)
+	}
+	if result != "done" {
+		t.Fatalf("Expected result 'done', got: %s", result)
+	}
+
+	pool.Close()
+	pool.Wait()
+}
