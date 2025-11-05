@@ -2,7 +2,6 @@ package goropo
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -16,13 +15,11 @@ type fnRunner func()
 // Generic function that will be executed when a task is dropped
 type fnOnDrop func()
 
+// Generic function that will be executed when a panic occurs within a task
+type fnOnPanic func(any)
+
 type Task[T any] func(context.Context) (T, error)
 type TaskAny = Task[any]
-
-var (
-	ErrPoolClosed  = errors.New("pool is closed")             // pool has been closed, no new tasks can be submitted
-	ErrPoolAborted = errors.New("pool aborted, task dropped") // pool has been aborted, task was dropped and failed to complete
-)
 
 type StopMode int
 
@@ -30,12 +27,6 @@ const (
 	StopModeGraceful StopMode = iota // gracefully stop the pool, allowing all queued tasks to complete but no new tasks
 	StopModeAbort    StopMode = iota // immediately abort the pool, finish currently running tasks but drop all unresolved queued tasks
 )
-
-// Task is a wrapper around a function to be executed by the worker pool
-type workerTask struct {
-	run    fnRunner // wrapped function to execute the submitted task
-	onDrop fnOnDrop // function to perform if/when the task is dropped by the pool (e.g. aborted)
-}
 
 type Pool struct {
 	mu          sync.Mutex
@@ -47,13 +38,20 @@ type Pool struct {
 	onPanic     func(any)       // optional handler for panics occurring within task execution
 	workerCount int             // number of worker goroutines in the pool
 	queueSize   int             // maximum size of the task queue
-	// ctx         context.Context    // context to manage cancellation of workers
-	// cancel      context.CancelFunc // function to cancel the pool's context
+}
+
+func (p *Pool) IsClosed() bool {
+	select {
+	case <-p.chClosed:
+		return true
+	default:
+		return false
+	}
 }
 
 // SetHandlerPanic sets a handler function to be called when a panic occurs within a task
 // The handler receives the recovered panic value as an argument
-func (p *Pool) SetHandlerPanic(handler func(any)) {
+func (p *Pool) SetPanicHandler(handler func(any)) {
 	defer Locker(&p.mu)()
 	p.onPanic = handler
 }
@@ -76,11 +74,19 @@ func (p *Pool) worker() {
 			func() {
 				// recover from panics within the task execution to ensure the worker continues running
 				defer func() {
-					if r := recover(); r != nil && p.onPanic != nil {
-						p.onPanic(r)
+					if r := recover(); r != nil {
+						if p.onPanic != nil {
+							p.onPanic(r)
+						}
+						if t.onPanic != nil {
+							t.onPanic(r)
+						}
 					}
+
 				}()
-				t.run()
+				if t.run != nil {
+					t.run()
+				}
 			}()
 		}
 	}
@@ -162,7 +168,6 @@ func (p *Pool) Stop(mode StopMode) {
 		}
 		// close the tasks channel to stop accepting new tasks
 		close(p.chTasks)
-
 	}
 	p.wg.Wait()
 }

@@ -24,6 +24,8 @@ type Future[T any] struct {
 	result *Result[T]     // cached result after task completion
 }
 
+type FuturePtr[T any] = *Future[T]
+
 type FutureAny = Future[any]
 
 // newFuture creates a new Future instance
