@@ -2,7 +2,6 @@ package goropo
 
 import (
 	"context"
-	"fmt"
 )
 
 // Submit submits a task to the worker pool for execution
@@ -91,7 +90,7 @@ func Go[T any](ctx context.Context, fn func(context.Context) (T, error)) *Future
 		defer func() {
 			if r := recover(); r != nil {
 				var zero T
-				f.resolve(zero, fmt.Errorf("%w: %v", ErrTaskPanicked, r))
+				f.resolve(zero, NewTaskPanicError(r))
 			}
 		}()
 		// execute the function and resolve the future with its result
