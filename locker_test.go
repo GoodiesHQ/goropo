@@ -31,38 +31,38 @@ func (mu *MutexWithCheck) IsLocked() bool {
 }
 
 func TestLocker_LockUnlock(t *testing.T) {
-	locker := &MutexWithCheck{}
+	mu := &MutexWithCheck{}
 
-	if locker.IsLocked() {
+	if mu.IsLocked() {
 		t.Fatal("Expected mutex to be initially unlocked")
 	}
 
-	unlock := Locker(locker)
-	if !locker.IsLocked() {
+	unlock := locker(mu)
+	if !mu.IsLocked() {
 		t.Fatal("Expected mutex to be locked after Locker call")
 	}
 
 	unlock()
-	if locker.IsLocked() {
+	if mu.IsLocked() {
 		t.Fatal("Expected mutex to be unlocked after unlock call")
 	}
 }
 
 func TestLocker_Deferred(t *testing.T) {
-	locker := &MutexWithCheck{}
+	mu := &MutexWithCheck{}
 
-	if locker.IsLocked() {
+	if mu.IsLocked() {
 		t.Fatal("Expected mutex to be initially unlocked")
 	}
 
 	func() {
-		defer Locker(locker)()
-		if !locker.IsLocked() {
+		defer locker(mu)()
+		if !mu.IsLocked() {
 			t.Fatal("Expected mutex to be locked inside deferred function")
 		}
 	}()
 
-	if locker.IsLocked() {
+	if mu.IsLocked() {
 		t.Fatal("Expected mutex to be unlocked after deferred function")
 	}
 }
