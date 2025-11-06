@@ -1,3 +1,4 @@
+// goropo is a lightweight goroutine worker pool implementation in Go
 package goropo
 
 import (
