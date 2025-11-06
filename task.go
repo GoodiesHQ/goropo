@@ -2,7 +2,6 @@ package goropo
 
 import (
 	"context"
-	"fmt"
 )
 
 // Task is a wrapper around a function to be executed by the worker pool
@@ -37,10 +36,7 @@ func newWorkerTask[T any](ctx context.Context, fut *Future[T], fn func(context.C
 	// function to call if the task panics during execution
 	onPanic := func(r any) {
 		var zero T
-		if err, ok := r.(error); ok {
-			fut.resolve(zero, fmt.Errorf("%w: %w", ErrTaskPanicked, err)) // inform that the task panicked
-		}
-		fut.resolve(zero, fmt.Errorf("%w: %v", ErrTaskPanicked, r)) // inform that the task panicked
+		fut.resolve(zero, NewTaskPanicError(r))
 	}
 
 	return workerTask{
