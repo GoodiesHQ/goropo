@@ -46,6 +46,11 @@ func (f *Future[T]) IsComplete() bool {
 	return f.result != nil
 }
 
+// Result returns the cached result if available, or nil if not yet resolved
+func (f *Future[T]) Result() *Result[T] {
+	return f.result
+}
+
 // Await blocks until the Future is resolved or the context is cancelled
 func (f *Future[T]) Await(ctx context.Context) (T, error) {
 	// Non-blocking check for a previously cached result
