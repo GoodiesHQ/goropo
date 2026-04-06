@@ -19,7 +19,10 @@ type fnOnDrop func()
 // Generic function that will be executed when a panic occurs within a task
 type fnOnPanic func(any)
 
+// Task is a function that can be queued and executed by the worker pool or standalone goroutine
 type Task[T any] func(context.Context) (T, error)
+
+// TaskAny is a non-generic version of Task using any type
 type TaskAny = Task[any]
 
 type StopMode int
@@ -55,7 +58,7 @@ func (p *Pool) IsClosed() bool {
 // SetHandlerPanic sets a handler function to be called when a panic occurs within a task
 // The handler receives the recovered panic value as an argument
 func (p *Pool) SetPanicHandler(handler func(any)) {
-	defer Locker(&p.mu)()
+	defer locker(&p.mu)()
 	p.onPanic = handler
 }
 
@@ -80,14 +83,6 @@ func (p *Pool) worker() {
 			func() {
 				// recover from panics within the task execution to ensure the worker continues running
 				defer func() {
-					// mark task as inactive
-					p.active.Add(-1)
-
-					// signal potential idle state
-					p.cond.L.Lock()
-					p.cond.Broadcast()
-					p.cond.L.Unlock()
-
 					if r := recover(); r != nil {
 						// pool panic handler, optional
 						if p.onPanic != nil {
@@ -98,6 +93,14 @@ func (p *Pool) worker() {
 							t.onPanic(r)
 						}
 					}
+
+					// mark task as inactive
+					p.active.Add(-1)
+
+					// signal potential idle state
+					p.cond.L.Lock()
+					p.cond.Broadcast()
+					p.cond.L.Unlock()
 
 				}()
 				if t.run != nil {
@@ -152,7 +155,7 @@ func (p *Pool) Wait() {
 
 // WaitIdle blocks until all currently active tasks have completed, does not close the pool
 func (p *Pool) WaitIdle() {
-	defer Locker(p.cond.L)()
+	defer locker(p.cond.L)()
 	for p.active.Load() > 0 || len(p.chTasks) > 0 {
 		p.cond.Wait()
 	}
@@ -218,6 +221,6 @@ func (p *Pool) Abort() {
 }
 
 // Submit submits a task to the worker pool for execution, returning a Future holding an any type
-func (p *Pool) Submit(ctx context.Context, fn func(context.Context) (any, error)) *FutureAny {
+func (p *Pool) Submit(ctx context.Context, fn TaskAny) *FutureAny {
 	return Submit(p, ctx, fn)
 }

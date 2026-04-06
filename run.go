@@ -5,7 +5,7 @@ import (
 )
 
 // Submit submits a task to the worker pool for execution
-func Submit[T any](p *Pool, ctx context.Context, fn func(context.Context) (T, error)) *Future[T] {
+func Submit[T any](p *Pool, ctx context.Context, fn Task[T]) *Future[T] {
 	// use background context if none provided
 	if ctx == nil {
 		ctx = context.Background()
@@ -38,7 +38,7 @@ func Submit[T any](p *Pool, ctx context.Context, fn func(context.Context) (T, er
 
 // TrySubmit attempts to submit a task to the worker pool without blocking
 // Returns ErrPoolQueueFull if the queue is full and the task cannot be queued immediately
-func TrySubmit[T any](p *Pool, ctx context.Context, fn func(context.Context) (T, error)) (*Future[T], error) {
+func TrySubmit[T any](p *Pool, ctx context.Context, fn Task[T]) (*Future[T], error) {
 	// use background context if none provided
 	if ctx == nil {
 		ctx = context.Background()
@@ -78,7 +78,7 @@ func TrySubmit[T any](p *Pool, ctx context.Context, fn func(context.Context) (T,
 }
 
 // Go is a convenience function that creates a new goroutine to execute the given function, no pool involved
-func Go[T any](ctx context.Context, fn func(context.Context) (T, error)) *Future[T] {
+func Go[T any](ctx context.Context, fn Task[T]) *Future[T] {
 	f := newFuture[T]()
 	go func() {
 		// check for context cancellation before executing the function
