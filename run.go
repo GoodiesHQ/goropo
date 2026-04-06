@@ -24,14 +24,19 @@ func Submit[T any](p *Pool, ctx context.Context, fn Task[T]) *Future[T] {
 		return fut
 	}
 
+	// increment outstanding before the send
+	p.outstanding.Add(1)
+
 	select {
 	case <-p.chClosed:
+		p.outstanding.Add(-1)
 		var zero T
 		fut.resolve(zero, ErrPoolClosed)
 	case <-ctx.Done():
+		p.outstanding.Add(-1)
 		var zero T
 		fut.resolve(zero, ctx.Err())
-	case p.chTasks <- task: // submit the task to the pool and wait
+	case p.chTasks <- task: // submit the task to the pool
 	}
 	return fut
 }
@@ -48,7 +53,6 @@ func TrySubmit[T any](p *Pool, ctx context.Context, fn Task[T]) (*Future[T], err
 
 	// check if the pool has been closed before submitting the task
 	if p.IsClosed() {
-		// create a new future to hold the result of the task
 		var zero T
 		fut.resolve(zero, ErrPoolClosed)
 		return fut, nil
@@ -69,10 +73,14 @@ func TrySubmit[T any](p *Pool, ctx context.Context, fn Task[T]) (*Future[T], err
 
 	task := newWorkerTask(ctx, fut, fn)
 
+	// increment outstanding before the non-blocking send attempt
+	p.outstanding.Add(1)
+
 	select {
 	case p.chTasks <- task:
 		return fut, nil
 	default:
+		p.outstanding.Add(-1)
 		return nil, ErrPoolQueueFull
 	}
 }

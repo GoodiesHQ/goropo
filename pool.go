@@ -42,8 +42,8 @@ type Pool struct {
 	onPanic     func(any)       // optional handler for panics occurring within task execution
 	workerCount int             // number of worker goroutines in the pool
 	queueSize   int             // maximum size of the task queue
-	active      atomic.Int32    // number of active tasks being processed
-	cond        *sync.Cond      // condition variable to signal changes in active task count
+	outstanding atomic.Int32    // tasks submitted but not yet completed (queued + running); incremented in Submit, decremented on completion or drop
+	cond        *sync.Cond      // condition variable to signal changes in outstanding task count
 }
 
 func (p *Pool) IsClosed() bool {
@@ -76,8 +76,6 @@ func (p *Pool) worker() {
 				// channel closed, exit the worker
 				return
 			}
-			// mark task as active
-			p.active.Add(1)
 
 			// execute the task
 			func() {
@@ -94,10 +92,8 @@ func (p *Pool) worker() {
 						}
 					}
 
-					// mark task as inactive
-					p.active.Add(-1)
-
-					// signal potential idle state
+					// task is done (completed or panicked); decrement outstanding and wake any WaitIdle callers
+					p.outstanding.Add(-1)
 					p.cond.L.Lock()
 					p.cond.Broadcast()
 					p.cond.L.Unlock()
@@ -140,7 +136,7 @@ func (p *Pool) reset() {
 	p.chClosed = make(chan struct{})
 	p.stopped.Store(false)
 	p.cond = sync.NewCond(&p.mu)
-	p.active.Store(0)
+	p.outstanding.Store(0)
 
 	for i := 0; i < p.workerCount; i++ {
 		p.wg.Add(1)
@@ -153,10 +149,12 @@ func (p *Pool) Wait() {
 	p.wg.Wait()
 }
 
-// WaitIdle blocks until all currently active tasks have completed, does not close the pool
+// WaitIdle blocks until all submitted tasks have completed, does not close the pool.
+// Uses the outstanding counter (incremented on submit, decremented on completion/drop)
+// so there is no window where a dequeued-but-not-yet-started task is missed.
 func (p *Pool) WaitIdle() {
 	defer locker(p.cond.L)()
-	for p.active.Load() > 0 || len(p.chTasks) > 0 {
+	for p.outstanding.Load() > 0 {
 		p.cond.Wait()
 	}
 }
@@ -174,6 +172,12 @@ func (p *Pool) drain() {
 			if t.onDrop != nil {
 				t.onDrop()
 			}
+			// decrement outstanding and wake any WaitIdle callers waiting on this task
+			p.outstanding.Add(-1)
+
+			p.cond.L.Lock()
+			p.cond.Broadcast()
+			p.cond.L.Unlock()
 		default:
 			return
 		}
